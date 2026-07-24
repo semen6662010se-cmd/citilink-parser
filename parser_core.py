@@ -4,9 +4,9 @@ import openpyxl
 from openpyxl.styles import Font, Alignment
 import winsound
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
-from tenacity import retry, stop_after_attempt, wait_fixed # <--- ИМПОРТИРУЕМ TENACITY
+from tenacity import retry, stop_after_attempt, wait_fixed
 
-############################################################## ЛОГГЕР
+############################################################## МОДУЛЬ ЖУРНАЛИРОВАНИЯ
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -17,11 +17,10 @@ logging.basicConfig(
     ]
 )
 
-############################################################## ФУНКЦИЯ
-# Tenacity: пробуем спарсить 3 раза, между попытками ждем 2 секунды
+############################################################## ОБРАБОТЧИК ДАННЫХ
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def parse_single_card(page, url, active_filters):
-    ############################################################## ЗАМОРОЗКА
+    ############################################################## БЛОКИРОВКА ИНТЕРАКТИВНОСТИ
     page.add_init_script("document.addEventListener('DOMContentLoaded', () => document.body.style.pointerEvents = 'none');")
     page.goto(url, wait_until="domcontentloaded", timeout=45000)
     
@@ -31,7 +30,7 @@ def parse_single_card(page, url, active_filters):
     raw_title = page.locator('h1').first.inner_text(timeout=5000).strip()
     title = raw_title.replace("Характеристики ", "") if raw_title.startswith("Характеристики ") else raw_title
     
-    ############################################################## ОЧИСТКА
+    ############################################################## НОРМАЛИЗАЦИЯ ДАННЫХ ЦЕНЫ
     price = "нет цены"
     price_locators = page.locator('span:has-text("₽"), div:has-text("₽")').all_inner_texts()
     for p in price_locators:
@@ -40,7 +39,7 @@ def parse_single_card(page, url, active_filters):
             price = p.strip()
             break
     
-    ############################################################## СЛОВАРЬ
+    ############################################################## ИЗВЛЕЧЕНИЕ ХАРАКТЕРИСТИК
     specs_dict = {}
     try:
         page.wait_for_selector('div[class*="PropertiesItem"]', timeout=10000)
@@ -53,7 +52,7 @@ def parse_single_card(page, url, active_filters):
                 v = val_loc.first.inner_text().strip()
                 specs_dict[k] = v
     except PlaywrightTimeoutError:
-        logging.warning(f"[{url}] Блок характеристик не найден.")
+        logging.warning(f"[{url}] Блок характеристик не обнаружен.")
 
     row_data = [title, price]
     for f in active_filters:
@@ -73,16 +72,16 @@ def parse_single_card(page, url, active_filters):
     return row_data
 
 def main_parser():
-    ############################################################## МЕНЮ
-    print("=== НАСТРОЙКА ПАРСЕРА ===")
+    ############################################################## ИНИЦИАЛИЗАЦИЯ ПАРАМЕТРОВ
+    print("=== КОНФИГУРАЦИЯ ПАРАМЕТРОВ ИЗВЛЕЧЕНИЯ ДАННЫХ ===")
     print("1 - Форм-фактор\n2 - Скорость чтения\n3 - Скорость записи\n4 - Тип памяти")
     print("5 - Ресурс TBW\n6 - Интерфейс\n7 - Контроллер\n8 - Гарантия")
     
-    user_choice = input("Введи цифры слитно (например 1234): ")
+    user_choice = input("Введите конфигурационную маску (например, 1234): ")
     if user_choice == "":
         user_choice = "12345678"
 
-    test_limit_input = input("Сколько спарсить для теста? (Enter - ВСЕ): ")
+    test_limit_input = input("Укажите лимит итераций (Enter - без ограничений): ")
     if test_limit_input == "":
         test_limit = 999999
     else:
@@ -110,7 +109,7 @@ def main_parser():
     
     all_data = []
 
-    ############################################################## БРАУЗЕР
+    ############################################################## ИНИЦИАЛИЗАЦИЯ ДРАЙВЕРА
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
         catalog_page = browser.new_page()
@@ -120,8 +119,8 @@ def main_parser():
         page_num = 1
         
         try:
-            logging.info("--- ЭТАП 1: Сбор ссылок каталога ---")
-            ############################################################## ПАГИНАЦИЯ
+            logging.info("--- ФАЗА 1: Индексация ссылок каталога ---")
+            ############################################################## МАРШРУТИЗАЦИЯ
             while True:
                 if page_num == 1:
                     cat_url = "https://www.citilink.ru/catalog/ssd-nakopiteli/?ref=mainmenu_plate"
@@ -133,10 +132,10 @@ def main_parser():
                     catalog_page.wait_for_selector('[data-meta-name="Snippet__title"]', state='visible', timeout=20000)
                 except PlaywrightTimeoutError:
                     if page_num == 1:
-                        logging.error("Не удалось прогрузить каталог.")
+                        logging.error("Тайм-аут загрузки корневой страницы каталога.")
                     break
 
-                ############################################################## СКРОЛЛ
+                ############################################################## ЭМУЛЯЦИЯ ПРОКРУТКИ
                 for _ in range(8):
                     try:
                         c = catalog_page.locator('[data-meta-name="Snippet__title"]').count()
@@ -144,11 +143,11 @@ def main_parser():
                         catalog_page.wait_for_function(f"document.querySelectorAll('[data-meta-name=\"Snippet__title\"]').length > {c}", timeout=2500)
                     except Exception: break
                 
-                ############################################################## ПЫЛЕСОС
+                ############################################################## ИЗВЛЕЧЕНИЕ УЗЛОВ
                 hrefs = catalog_page.evaluate("() => Array.from(document.querySelectorAll('[data-meta-name=\"Snippet__title\"]')).map(el => { const a = el.closest('a'); return a ? a.href : null; }).filter(h => h)")
                 
                 new_count = 0
-                ############################################################## ХАК
+                ############################################################## НОРМАЛИЗАЦИЯ ССЫЛОК
                 for h in set(hrefs):
                     link = h
                     if not link.endswith('/'):
@@ -160,38 +159,36 @@ def main_parser():
                         product_links.append(link)
                         new_count += 1
                 
-                logging.info(f"Страница {page_num}: Найдено {new_count} новых товаров.")
+                logging.info(f"Итерация {page_num}: Индексировано {new_count} уникальных URL.")
                 if new_count == 0 or len(product_links) >= test_limit: 
                     break
                 page_num += 1
 
             product_links = product_links[:test_limit]
             
-            logging.info(f"--- ЭТАП 2: Парсинг карточек (Всего {len(product_links)}) ---")
+            logging.info(f"--- ФАЗА 2: Извлечение данных (Всего объектов: {len(product_links)}) ---")
             try:
-                ############################################################## ЦИКЛ
+                ############################################################## ЦИКЛИЧЕСКАЯ ОБРАБОТКА
                 for i, link in enumerate(product_links):
-                    logging.info(f"Прогресс: [{i+1}/{len(product_links)}]")
+                    logging.info(f"Статус выполнения: [{i+1}/{len(product_links)}]")
                     product_page = browser.new_page() 
                     try:
-                        # Если функция падает, Tenacity сама повторит ее 3 раза
                         row_data = parse_single_card(product_page, link, active_filters)
                         if row_data:
                             all_data.append(row_data)
                     except Exception as e:
-                        # Сюда код дойдет, только если все 3 попытки Tenacity провалились
-                        logging.error(f"[{link}] Товар пропущен после 3 попыток. Ошибка: {e}")
+                        logging.error(f"[{link}] Ошибка обработки объекта. Системный вывод: {e}")
                     finally:
                         product_page.close()
-            ############################################################## СТОП
+            ############################################################## ОБРАБОТКА ПРЕРЫВАНИЙ
             except KeyboardInterrupt:
-                logging.warning("Вызвано ручное прерывание (Ctrl+C). Завершаем цикл...")
+                logging.warning("Зафиксировано ручное прерывание. Инициализация безопасного завершения...")
                     
         finally:
             browser.close()
 
-    ############################################################## ЭКСЕЛЬ
-    logging.info("--- ЭТАП 4: Сохранение и форматирование Excel ---")
+    ############################################################## ЭКСПОРТ ДАННЫХ
+    logging.info("--- ФАЗА 3: Экспорт и форматирование файла XLSX ---")
     wb = openpyxl.Workbook()
     sheet = wb.active
     sheet.title = "custom_data"
@@ -208,11 +205,11 @@ def main_parser():
     wb.save("citilink_deep_filtered.xlsx")
     
     if len(all_data) == 0:
-        logging.warning("Скрипт завершен, но данные не собраны.")
+        logging.warning("Исполнение завершено. Результирующий массив данных пуст.")
     else:
-        logging.info("Успешно сохранено! Открывай Эксель.")
+        logging.info("Экспорт успешно завершен. Файл доступен для чтения.")
         
-    ############################################################## ЗВУК
+    ############################################################## СИСТЕМНОЕ ОПОВЕЩЕНИЕ
     try:
         winsound.Beep(1000, 500) 
     except Exception: 
